@@ -15,44 +15,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
 # =============================================================================
-# 1. Load Medical Dataset
-# =============================================================================
-
-print("--- Loading Hugging Face Medical QA Dataset ---")
-
-MAX_RECORDS = 5000
-
-try:
-    raw_dataset = load_dataset("keivalya/MedQuad-MedicalQnADataset", split="train")
-    df = pd.DataFrame(raw_dataset)
-    df = df[['Question', 'Answer']].rename(columns={'Question': 'symptom_description', 'Answer': 'diagnosis_treatment'})
-    df = df.head(MAX_RECORDS)
-
-except Exception as e:
-    print(f"Dataset download failed or timed out: {e}\nFalling back to synthetic robust medical dataframe.")
-    fallback_data = {
-        "symptom_description": [
-            "Patient presents with persistent dry cough, high fever, shortness of breath, and loss of taste.",
-            "Patient exhibits severe chest pain radiating to the left arm, acute sweating, and nausea.",
-            "Frequent urination, excessive thirst, unexplained weight loss, and chronic fatigue noted.",
-            "Acute throbbing unilateral headache accompanied by sensitivity to light, nausea, and visual aura."
-        ],
-        "diagnosis_treatment": [
-            "Diagnosis: Suspected Respiratory Viral Infection (e.g., COVID-19 / Influenza). Treatment: Isolate, monitor oxygen saturation, prescribe antipyretics, and maintain aggressive hydration.",
-            "Diagnosis: Suspected Acute Myocardial Infarction (Heart Attack). Treatment: Emergency administration of Aspirin, oxygen therapy, and immediate transfer to cardiac catheterization lab.",
-            "Diagnosis: Suspected Type 2 Diabetes Mellitus. Treatment: Initiate Metformin therapy, perform HbA1c screening, mandate strict low-glycemic dietary modifications.",
-            "Diagnosis: Classic Migraine Episode. Treatment: Administer Triptans (e.g., Sumatriptan), prescribe NSAIDs, advise resting in a dark, noise-isolated environment."
-        ]
-    }
-    df = pd.DataFrame(fallback_data)
-
-df['full_medical_record'] = "Symptom/Case: " + df['symptom_description'] + "\n" + df['diagnosis_treatment']
-print(f"Successfully processed {len(df)} medical knowledge records.")
-print(df[['full_medical_record']].head(2))
-
-
-# =============================================================================
-# 2. Hierarchical Chunking
+# 1. Hierarchical Chunking
 # =============================================================================
 
 class HierarchicalMedicalChunker:
@@ -92,56 +55,8 @@ class HierarchicalMedicalChunker:
         return child_chunks_list, hierarchy_mapping
 
 
-chunker = HierarchicalMedicalChunker()
-child_chunks, parent_map = chunker.process_corpus(df)
-print(f"Generated {len(parent_map)} Parent Context Chunks and {len(child_chunks)} Child Embedding Chunks.")
-
-
 # =============================================================================
-# 3. Embedding & FAISS Indexing (with caching)
-# =============================================================================
-
-FAISS_INDEX_FILE_PATH = "medical_rag_data.faiss"
-METADATA_FILE_PATH = "medical_rag_data_metadata.json"
-
-embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-if os.path.exists(FAISS_INDEX_FILE_PATH) and os.path.exists(METADATA_FILE_PATH):
-    print("--- Found stable cache. Loading database from disk ---")
-    faiss_index = faiss.read_index(FAISS_INDEX_FILE_PATH)
-
-    with open(METADATA_FILE_PATH, 'r') as f:
-        loaded_data = json.load(f)
-
-    child_chunks = loaded_data['child_chunks']
-    parent_map = loaded_data['parent_map']
-    child_texts = [item['text'] for item in child_chunks]
-    print(f"FAISS Vector database restored with {faiss_index.ntotal} records. Metadata and parent map loaded.")
-
-else:
-    print("--- Cache not found. Initiating vectorization and saving stage ---")
-    child_texts = [item['text'] for item in child_chunks]
-
-    print("Vectorizing medical knowledge base chunks...")
-    child_embeddings = embedding_model.encode(child_texts, show_progress_bar=True, convert_to_numpy=True)
-
-    embedding_dim = child_embeddings.shape[1]
-    faiss_index = faiss.IndexFlatIP(embedding_dim)
-    faiss.normalize_L2(child_embeddings)
-    faiss_index.add(child_embeddings)
-
-    print("Exporting data to persistent storage...")
-    faiss.write_index(faiss_index, FAISS_INDEX_FILE_PATH)
-
-    data_to_save = {"child_chunks": child_chunks, "parent_map": parent_map}
-    with open(METADATA_FILE_PATH, 'w') as f:
-        json.dump(data_to_save, f, indent=4)
-
-    print(f"Successfully created: '{FAISS_INDEX_FILE_PATH}' and '{METADATA_FILE_PATH}' in your active directory.")
-
-
-# =============================================================================
-# 4. Query Expansion
+# 2. Query Expansion
 # =============================================================================
 
 def expand_medical_query(user_symptom_query):
@@ -167,23 +82,16 @@ def expand_medical_query(user_symptom_query):
     return list(set(expanded_queries))[:3]
 
 
-sample_query = "Patient feels dizzy and has sharp chest pain"
-expanded_variants = expand_medical_query(sample_query)
-print(f"Original Input: {sample_query}")
-print(f"Expanded Search Vectors: {expanded_variants}")
-
-
 # =============================================================================
-# 5. Two-Stage Retrieval & Cross-Encoder Re-ranking
+# 3. Two-Stage Retrieval & Cross-Encoder Re-ranking
 # =============================================================================
 
-reranker_name = "BAAI/bge-reranker-base"
-rerank_tokenizer = AutoTokenizer.from_pretrained(reranker_name)
-rerank_model = AutoModelForSequenceClassification.from_pretrained(reranker_name)
-rerank_model.eval()
-
-
-def execute_advanced_retrieval(raw_query, top_k_vectors=5, final_top_n=2):
+def execute_advanced_retrieval(raw_query, embedding_model, faiss_index, child_chunks, parent_map,
+                                rerank_tokenizer, rerank_model, top_k_vectors=5, final_top_n=2):
+    """
+    Performs two-stage retrieval: vector search with query expansion followed by
+    cross-encoder re-ranking to return the most relevant parent context chunks.
+    """
     queries_to_search = expand_medical_query(raw_query)
 
     candidate_child_indices = set()
@@ -214,21 +122,20 @@ def execute_advanced_retrieval(raw_query, top_k_vectors=5, final_top_n=2):
     return [context for score, context in ranked_results[:final_top_n]]
 
 
-retrieved_contexts = execute_advanced_retrieval("I am noticing extreme thirst and going to the bathroom too often.", final_top_n=1)
-print("\n--- Advanced Top Retrieved Context ---")
-print(retrieved_contexts[0] if retrieved_contexts else "No context found.")
-
-
 # =============================================================================
-# 6. Context Orchestration & Prompt Assembly
+# 4. Context Orchestration & Prompt Assembly
 # =============================================================================
 
-def orchestrate_rag_payload(patient_symptoms_input):
+def orchestrate_rag_payload(patient_symptoms_input, embedding_model, faiss_index, child_chunks,
+                             parent_map, rerank_tokenizer, rerank_model):
     """
     Accepts patient symptoms, orchestrates advanced retrieval, handles grounding data extraction,
     and packages payload for external LLM ingestion.
     """
-    discovered_grounding_contexts = execute_advanced_retrieval(patient_symptoms_input, final_top_n=2)
+    discovered_grounding_contexts = execute_advanced_retrieval(
+        patient_symptoms_input, embedding_model, faiss_index,
+        child_chunks, parent_map, rerank_tokenizer, rerank_model, final_top_n=2
+    )
     context_str = "\n---\n".join(discovered_grounding_contexts)
 
     system_instruction = (
@@ -257,9 +164,118 @@ def orchestrate_rag_payload(patient_symptoms_input):
     }
 
 
-# Execute full pipeline end-to-end
-test_symptoms = "Patient has a high fever, severe dry cough and cannot smell anything."
-pipeline_payload = orchestrate_rag_payload(test_symptoms)
+# =============================================================================
+# 5. Setup Helpers
+# =============================================================================
 
-print("### FULL DISPATCH READY PROMPT PAYLOAD ###")
-print(pipeline_payload["injected_prompt_payload"])
+def load_dataset_df(max_records=5000):
+    """Loads and preprocesses the medical QA dataset from Hugging Face."""
+    print("--- Loading Hugging Face Medical QA Dataset ---")
+    try:
+        raw_dataset = load_dataset("keivalya/MedQuad-MedicalQnADataset", split="train")
+        df = pd.DataFrame(raw_dataset)
+        df = df[['Question', 'Answer']].rename(columns={'Question': 'symptom_description', 'Answer': 'diagnosis_treatment'})
+        df = df.head(max_records)
+    except Exception as e:
+        print(f"Dataset download failed or timed out: {e}\nFalling back to synthetic robust medical dataframe.")
+        fallback_data = {
+            "symptom_description": [
+                "Patient presents with persistent dry cough, high fever, shortness of breath, and loss of taste.",
+                "Patient exhibits severe chest pain radiating to the left arm, acute sweating, and nausea.",
+                "Frequent urination, excessive thirst, unexplained weight loss, and chronic fatigue noted.",
+                "Acute throbbing unilateral headache accompanied by sensitivity to light, nausea, and visual aura."
+            ],
+            "diagnosis_treatment": [
+                "Diagnosis: Suspected Respiratory Viral Infection (e.g., COVID-19 / Influenza). Treatment: Isolate, monitor oxygen saturation, prescribe antipyretics, and maintain aggressive hydration.",
+                "Diagnosis: Suspected Acute Myocardial Infarction (Heart Attack). Treatment: Emergency administration of Aspirin, oxygen therapy, and immediate transfer to cardiac catheterization lab.",
+                "Diagnosis: Suspected Type 2 Diabetes Mellitus. Treatment: Initiate Metformin therapy, perform HbA1c screening, mandate strict low-glycemic dietary modifications.",
+                "Diagnosis: Classic Migraine Episode. Treatment: Administer Triptans (e.g., Sumatriptan), prescribe NSAIDs, advise resting in a dark, noise-isolated environment."
+            ]
+        }
+        df = pd.DataFrame(fallback_data)
+
+    df['full_medical_record'] = "Symptom/Case: " + df['symptom_description'] + "\n" + df['diagnosis_treatment']
+    print(f"Successfully processed {len(df)} medical knowledge records.")
+    return df
+
+
+def build_or_load_index(child_chunks, parent_map, embedding_model,
+                         faiss_index_path="medical_rag_data.faiss",
+                         metadata_path="medical_rag_data_metadata.json"):
+    """Builds a FAISS index from scratch or loads a cached one from disk."""
+    if os.path.exists(faiss_index_path) and os.path.exists(metadata_path):
+        print("--- Found stable cache. Loading database from disk ---")
+        faiss_index = faiss.read_index(faiss_index_path)
+        with open(metadata_path, 'r') as f:
+            loaded_data = json.load(f)
+        child_chunks = loaded_data['child_chunks']
+        parent_map = loaded_data['parent_map']
+        print(f"FAISS Vector database restored with {faiss_index.ntotal} records.")
+    else:
+        print("--- Cache not found. Initiating vectorization and saving stage ---")
+        child_texts = [item['text'] for item in child_chunks]
+        print("Vectorizing medical knowledge base chunks...")
+        child_embeddings = embedding_model.encode(child_texts, show_progress_bar=True, convert_to_numpy=True)
+        embedding_dim = child_embeddings.shape[1]
+        faiss_index = faiss.IndexFlatIP(embedding_dim)
+        faiss.normalize_L2(child_embeddings)
+        faiss_index.add(child_embeddings)
+        print("Exporting data to persistent storage...")
+        faiss.write_index(faiss_index, faiss_index_path)
+        with open(metadata_path, 'w') as f:
+            json.dump({"child_chunks": child_chunks, "parent_map": parent_map}, f, indent=4)
+        print(f"Successfully created: '{faiss_index_path}' and '{metadata_path}'.")
+
+    return faiss_index, child_chunks, parent_map
+
+
+def load_models():
+    """Loads the embedding model and cross-encoder reranker."""
+    embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    reranker_name = "BAAI/bge-reranker-base"
+    rerank_tokenizer = AutoTokenizer.from_pretrained(reranker_name)
+    rerank_model = AutoModelForSequenceClassification.from_pretrained(reranker_name)
+    rerank_model.eval()
+    return embedding_model, rerank_tokenizer, rerank_model
+
+
+# =============================================================================
+# 6. Main
+# =============================================================================
+
+if __name__ == "__main__":
+    # Load dataset
+    df = load_dataset_df(max_records=5000)
+
+    # Chunk corpus
+    chunker = HierarchicalMedicalChunker()
+    child_chunks, parent_map = chunker.process_corpus(df)
+    print(f"Generated {len(parent_map)} Parent Context Chunks and {len(child_chunks)} Child Embedding Chunks.")
+
+    # Load models
+    embedding_model, rerank_tokenizer, rerank_model = load_models()
+
+    # Build or load FAISS index
+    faiss_index, child_chunks, parent_map = build_or_load_index(child_chunks, parent_map, embedding_model)
+
+    # Test query expansion
+    sample_query = "Patient feels dizzy and has sharp chest pain"
+    print(f"Original Input: {sample_query}")
+    print(f"Expanded Search Vectors: {expand_medical_query(sample_query)}")
+
+    # Test retrieval
+    retrieved_contexts = execute_advanced_retrieval(
+        "I am noticing extreme thirst and going to the bathroom too often.",
+        embedding_model, faiss_index, child_chunks, parent_map,
+        rerank_tokenizer, rerank_model, final_top_n=1
+    )
+    print("\n--- Advanced Top Retrieved Context ---")
+    print(retrieved_contexts[0] if retrieved_contexts else "No context found.")
+
+    # Test full pipeline
+    test_symptoms = "Patient has a high fever, severe dry cough and cannot smell anything."
+    pipeline_payload = orchestrate_rag_payload(
+        test_symptoms, embedding_model, faiss_index,
+        child_chunks, parent_map, rerank_tokenizer, rerank_model
+    )
+    print(pipeline_payload["injected_prompt_payload"])
