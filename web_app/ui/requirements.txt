@@ -1,0 +1,15 @@
+# Install all dependencies 
+# pip install -r requirements.txt
+
+streamlit
+torch
+transformers
+accelerate
+peft
+sacremoses
+datasets
+pandas
+numpy
+sentencepiece
+faiss-cpu
+sentence-transformers
