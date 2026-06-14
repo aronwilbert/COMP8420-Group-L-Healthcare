@@ -20,3 +20,17 @@ MediAssist AI is a modular, privacy-preserving clinical chatbot pipeline. This p
 ```bash
 git clone [https://github.com/aronwilbert/COMP8420-Group-L-Healthcare.git](https://github.com/aronwilbert/COMP8420-Group-L-Healthcare.git)
 cd COMP8420-Group-L-Healthcare
+```
+
+**2. Install dependencies
+```bash
+pip install -r requirements.txt 
+# Or manually install: torch transformers peft spacy medspacy streamlit faiss-cpu sentence-transformers textblob
+```
+
+**3. Launch the Integrated UI
+Navigate to the integrated web app folder and run the Streamlit server:
+```bash
+cd web_app-integrated
+streamlit run app.py  # Replace 'app.py' with your actual main script name (e.g., medi_chat.py)
+```
