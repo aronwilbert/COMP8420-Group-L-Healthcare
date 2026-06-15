@@ -166,7 +166,7 @@ def load_environment(llm_name: str):
 
     model = AutoModelForCausalLM.from_pretrained(
         llm_name,
-        torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32,
+        torch_dtype = torch.float16 if (torch.cuda.is_available() or torch.backends.mps.is_available()) else torch.float32, # Add mps support
         device_map = 'auto',
     )
     model.eval()
