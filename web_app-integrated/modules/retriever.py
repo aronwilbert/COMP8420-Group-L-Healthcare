@@ -216,7 +216,7 @@ def build_or_load_index(child_chunks, parent_map, embedding_model,
         child_texts = [item['text'] for item in child_chunks]
         print("Vectorizing medical knowledge base chunks...")
         child_embeddings = embedding_model.encode(child_texts, show_progress_bar=True, convert_to_numpy=True)
-        child_embeddings = np.ascontiguousarray(child_embeddings.astype(np.float32))  # force contiguous float32
+        child_embeddings = np.ascontiguousarray(child_embeddings.astype(np.float32))
         embedding_dim = child_embeddings.shape[1]
         faiss_index = faiss.IndexFlatIP(embedding_dim)
         faiss.normalize_L2(child_embeddings)
@@ -234,7 +234,7 @@ def load_models():
     if torch.cuda.is_available():
         device = 'cuda'
     elif torch.backends.mps.is_available():
-        device = 'cpu'  
+        device = 'mps'  
     else:
         device = 'cpu'
 
