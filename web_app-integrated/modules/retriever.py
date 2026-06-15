@@ -113,6 +113,7 @@ def execute_advanced_retrieval(raw_query, embedding_model, faiss_index, child_ch
     pairs = [[raw_query, ctx] for ctx in parent_contexts]
     with torch.no_grad():
         inputs = rerank_tokenizer(pairs, padding=True, truncation=True, return_tensors='pt', max_length=512)
+        inputs = {k: v.to(rerank_model.device) for k, v in inputs.items()}
         scores = rerank_model(**inputs).logits.view(-1).float().tolist()
 
     ranked_results = sorted(zip(scores, parent_contexts), key=lambda x: x[0], reverse=True)
@@ -215,6 +216,7 @@ def build_or_load_index(child_chunks, parent_map, embedding_model,
         child_texts = [item['text'] for item in child_chunks]
         print("Vectorizing medical knowledge base chunks...")
         child_embeddings = embedding_model.encode(child_texts, show_progress_bar=True, convert_to_numpy=True)
+        child_embeddings = np.ascontiguousarray(child_embeddings.astype(np.float32))  # force contiguous float32
         embedding_dim = child_embeddings.shape[1]
         faiss_index = faiss.IndexFlatIP(embedding_dim)
         faiss.normalize_L2(child_embeddings)
@@ -229,11 +231,17 @@ def build_or_load_index(child_chunks, parent_map, embedding_model,
 
 
 def load_models():
-    """Loads the embedding model and cross-encoder reranker."""
-    embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    if torch.cuda.is_available():
+        device = 'cuda'
+    elif torch.backends.mps.is_available():
+        device = 'cpu'  
+    else:
+        device = 'cpu'
+
+    embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=device)
     reranker_name = "BAAI/bge-reranker-base"
     rerank_tokenizer = AutoTokenizer.from_pretrained(reranker_name)
-    rerank_model = AutoModelForSequenceClassification.from_pretrained(reranker_name)
+    rerank_model = AutoModelForSequenceClassification.from_pretrained(reranker_name).to(device)
     rerank_model.eval()
     return embedding_model, rerank_tokenizer, rerank_model
 

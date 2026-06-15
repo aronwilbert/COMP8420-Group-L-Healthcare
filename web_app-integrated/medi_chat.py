@@ -5,6 +5,7 @@ from threading import Thread
 
 import copy
 
+
 # ======= Modules ========
 from modules.ner import MedicalNERModule
 from modules.retriever import RetrieverModule
@@ -164,11 +165,21 @@ CLS_SENT_ON        = st.session_state['app_state']['CLS_SENT_ON']
 def load_environment(llm_name: str):
     tokenizer = AutoTokenizer.from_pretrained(llm_name)
 
+    # Updated device to add mps support
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        dtype  = torch.float16
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+        dtype  = torch.float16
+    else:
+        device = torch.device('cpu')
+        dtype  = torch.float32
+
     model = AutoModelForCausalLM.from_pretrained(
         llm_name,
-        torch_dtype = torch.float16 if (torch.cuda.is_available() or torch.backends.mps.is_available()) else torch.float32, # Add mps support
-        device_map = 'auto',
-    )
+        torch_dtype = dtype,
+    ).to(device)
     model.eval()
 
     med_ner = MedicalNERModule()
