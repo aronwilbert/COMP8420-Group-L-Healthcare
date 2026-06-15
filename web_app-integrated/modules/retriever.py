@@ -1,4 +1,10 @@
 import os
+# ─── FORCE MAC OS SINGLE-THREADING (PREVENTS SEGFAULT) ───────
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+# ─────────────────────────────────────────────────────────────
+
 import json
 import torch
 import numpy as np
@@ -312,3 +318,5 @@ class RetrieverModule:
 
     def __call__(self, text: str, top_count: int = 2):
         return self.retrieve(text, top_count)
+    
+
