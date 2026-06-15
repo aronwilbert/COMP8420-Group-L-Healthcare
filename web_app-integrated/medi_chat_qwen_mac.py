@@ -2,6 +2,8 @@ import streamlit as st
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 import torch
 from threading import Thread
+from pathlib import Path
+from peft import PeftModel
 
 import copy
 
@@ -22,8 +24,11 @@ st.set_page_config(page_title = 'MediAssist AI', page_icon = '🩺', layout = 'c
 # Sidebar – Settings
 # ─────────────────────────────────────────────────────────────
 
-#MODEL_NAME = 'qvac/MedPsy-1.7B'
-MODEL_NAME = 'Qwen/Qwen3-1.7B'
+APP_DIR = Path(__file__).resolve().parent
+ROOT_DIR = APP_DIR.parent
+
+BASE_MODEL_NAME = 'Qwen/Qwen3-1.7B'
+LORA_PATH = ROOT_DIR / 'LLM' / 'qwen3_1_7b_familydoctor_final'
 
 
 SYSTEM_PROMPTS = {
@@ -53,7 +58,7 @@ SYSTEM_PROMPTS = {
 }
 
 REASONING      = True # Always ON
-MAX_NEW_TOKENS = 2048
+MAX_NEW_TOKENS = 2048 
 TEMPERATURE = 0.10
 TOP_P = 0.9
 
@@ -162,40 +167,54 @@ CLS_SENT_ON        = st.session_state['app_state']['CLS_SENT_ON']
 # ─────────────────────────────────────────────────────────────
 # Model loading  (cached - survives Streamlit reruns)
 # ─────────────────────────────────────────────────────────────
-@st.cache_resource(show_spinner='⏳ Loading the system - this may take a few moments')
-def load_environment(llm_name: str):
-    tokenizer = AutoTokenizer.from_pretrained(llm_name)
+@st.cache_resource(show_spinner='⏳ Loading fine-tuned Qwen3 FamilyDoctor model - this may take a few moments')
+def load_environment(base_model_name: str, lora_path: str):
+    lora_path_obj = Path(lora_path)
+    if not lora_path_obj.exists():
+        raise FileNotFoundError(f'LoRA model not found: {lora_path_obj}')
 
-    # Updated device to add mps support
+    tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code = True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # Setup hardware device layout targets cleanly up-front
     if torch.cuda.is_available():
-        dtype  = torch.float16
+        device_mapping = {"": "cuda"}
+        dtype          = torch.float16
     elif torch.backends.mps.is_available():
-        dtype  = torch.float16
+        device_mapping = {"": "mps"}
+        dtype          = torch.float16
     else:
-        dtype  = torch.float32
+        device_mapping = {"": "cpu"}
+        dtype          = torch.float32
 
-    model = AutoModelForCausalLM.from_pretrained(
-        llm_name,
-        torch_dtype = dtype,
-        device_map  = "auto",
-        attn_implementation = "sdpa"
+    # Load base model directly into hardware layout memory (Removes .to(device) lag)
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        dtype               = dtype,          # Fixed deprecated argument name
+        trust_remote_code   = True,
+        device_map          = device_mapping, # Uses clean device pairing
+        attn_implementation = "sdpa",         # Fast native Apple execution kernels
+        local_files_only    = True            # Bypasses web-checks that hang loading
     )
+
+    # Apply the fine-tuned medical weights directly over the base layout
+    model = PeftModel.from_pretrained(base_model, str(lora_path_obj))
     model.eval()
 
     med_ner = MedicalNERModule()
-
     med_rag = RetrieverModule()
-
     redactor = CensorshipModule(placeholder = '███')
-
-    cls_specialty = SpecialtyClassifierModule('./specialty_classifier_objects.joblib')
-
+    cls_specialty = SpecialtyClassifierModule(str(APP_DIR / 'specialty_classifier_objects.joblib'))
     cls_sentiment = SentimentAnalysisModule()
 
     return model, tokenizer, med_ner, med_rag, redactor, cls_specialty, cls_sentiment
 
 
-model, tokenizer, med_ner, med_rag, redactor, cls_specialty, cls_sentiment = load_environment(MODEL_NAME)
+model, tokenizer, med_ner, med_rag, redactor, cls_specialty, cls_sentiment = load_environment(
+    BASE_MODEL_NAME,
+    str(LORA_PATH),
+)
 
 # ─────────────────────────────────────────────────────────────
 # Session state
@@ -206,11 +225,14 @@ if 'messages' not in st.session_state:
 # ─────────────────────────────────────────────────────────────
 # Streaming generator
 # ─────────────────────────────────────────────────────────────
-_STRIP = ['<|im_end|>', '<|endoftext|>', '<|im_start|>'] # Special tokens that may leak when skip_special_tokens=False
+_STRIP = ['<|im_end|>', '<|endoftext|>', '<|im_start|>'] 
 
 RESP_STATE_INIT = 0
 RESP_STATE_COT  = 1
 RESP_STATE_RESP = 2
+
+def model_device():
+    return next(model.parameters()).device
 
 def strip_highlighting(messages: list[dict[str, str]]):
     messages = copy.deepcopy(messages)
@@ -260,12 +282,12 @@ def stream_response(
     except TypeError:
         prompt = tokenizer.apply_chat_template(messages, tokenize = False, add_generation_prompt = True)
 
-    inputs = tokenizer(prompt, return_tensors = 'pt').to(model.device)
+    inputs = tokenizer(prompt, return_tensors = 'pt').to(model_device())
 
     streamer = TextIteratorStreamer(
         tokenizer,
         skip_prompt                  = True,
-        skip_special_tokens          = False, # skip_special_tokens=False so that <think> / </think> survive the decode
+        skip_special_tokens          = False, 
         clean_up_tokenization_spaces = False,
     )
 
@@ -279,17 +301,14 @@ def stream_response(
         'pad_token_id':   tokenizer.eos_token_id,
     }
 
-    # Run model.generate() in a background thread so the main thread
-    # can iterate over the streamer without blocking.
-    thread = Thread(target = model.generate, kwargs = gen_kwargs, daemon = True) # type: ignore
+    thread = Thread(target = model.generate, kwargs = gen_kwargs, daemon = True) 
     thread.start()
 
-    # ── State machine to parse <think>…</think> ───────────────
     buffer   = ''
     thinking = ''
     response = ''
-    t_start  = 0 # index in buffer where thinking text begins
-    t_end    = 0 # index in buffer where </think> begins
+    t_start  = 0 
+    t_end    = 0 
     state: int = RESP_STATE_INIT
 
     for chunk in streamer:
@@ -327,7 +346,6 @@ def stream_response(
 
         yield thinking, response, False
 
-    # ── Final clean-up ─────────────────────────────────────────
     for tok in _STRIP:
         response = response.replace(tok, '')
     yield thinking.strip(), response.strip(), True
@@ -345,7 +363,6 @@ def change_censorship_character(text: str):
         return text
     return text.replace(redactor.placeholder, '███')
 
-# Render existing conversation history
 for msg in st.session_state.messages:
     with st.chat_message(msg['role']):
 
@@ -358,7 +375,6 @@ for msg in st.session_state.messages:
 
         if msg['role'] == 'user':
             user_content = msg['content']
-            # specialty
             if 'rendered_ner' in msg:
                 user_content = msg['rendered_ner']
 
@@ -372,7 +388,6 @@ for msg in st.session_state.messages:
         else:
             st.markdown(msg['content'], unsafe_allow_html = True)
 
-# Accept new user input
 if user_input := st.chat_input(PROMPT_PLACEHOLDER):
 
     with st.spinner('Working on your request...'):
@@ -423,12 +438,10 @@ if user_input := st.chat_input(PROMPT_PLACEHOLDER):
 
         st.markdown(user_input_for_display, unsafe_allow_html = True)
 
-    # ── Stream assistant response ─────────────────────────────
     with st.chat_message('assistant'):
-        # Thinking lives inside a collapsible expander (starts open while streaming)
         think_exp  = st.expander('💭 Thinking...', expanded = True)
-        think_slot = think_exp.empty()   # updated token-by-token
-        resp_slot  = st.empty()          # updated token-by-token
+        think_slot = think_exp.empty()   
+        resp_slot  = st.empty()          
 
         last_thinking = ''
         last_response = ''
@@ -449,14 +462,11 @@ if user_input := st.chat_input(PROMPT_PLACEHOLDER):
             if thinking:
                 think_slot.markdown(thinking)
 
-            # Append a blinking cursor while still streaming
             resp_slot.markdown(response if is_final else response + ' ▌')
 
-        # Finalize display (remove cursor, freeze thinking)
         think_slot.markdown(last_thinking)
         resp_slot.markdown(last_response)
 
-    # ── Persist to history ────────────────────────────────────
     st.session_state.messages.append({
         'role':     'assistant',
         'content':  last_response,
