@@ -21,7 +21,7 @@ st.set_page_config(page_title = 'MediAssist AI', page_icon = '🩺', layout = 'c
 # Sidebar – Settings
 # ─────────────────────────────────────────────────────────────
 
-MODEL_NAME = 'qvac/MedPsy-4B'
+MODEL_NAME = 'qvac/MedPsy-1.7B'
 
 
 SYSTEM_PROMPTS = {
