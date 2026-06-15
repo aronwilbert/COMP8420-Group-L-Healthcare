@@ -167,19 +167,18 @@ def load_environment(llm_name: str):
 
     # Updated device to add mps support
     if torch.cuda.is_available():
-        device = torch.device('cuda')
         dtype  = torch.float16
     elif torch.backends.mps.is_available():
-        device = torch.device('mps')
         dtype  = torch.float16
     else:
-        device = torch.device('cpu')
         dtype  = torch.float32
 
     model = AutoModelForCausalLM.from_pretrained(
         llm_name,
         torch_dtype = dtype,
-    ).to(device)
+        device_map  = "auto",
+        attn_implementation = "sdpa"
+    )
     model.eval()
 
     med_ner = MedicalNERModule()
