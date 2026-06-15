@@ -13,3 +13,5 @@ numpy
 sentencepiece
 faiss-cpu
 sentence-transformers
+spacy
+medspacy
