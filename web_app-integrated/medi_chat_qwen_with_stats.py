@@ -1,4 +1,28 @@
 import streamlit as st
+import os
+import warnings
+import transformers.utils.import_utils as transformers_import_utils
+
+# Keep the ML/NLP stack single-process in Streamlit. On Python 3.13, joblib/loky
+# can otherwise leave a harmless semaphore warning at shutdown.
+os.environ.setdefault('JOBLIB_MULTIPROCESSING', '0')
+os.environ.setdefault('LOKY_MAX_CPU_COUNT', '1')
+os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('VECLIB_MAXIMUM_THREADS', '1')
+
+warnings.filterwarnings(
+    'ignore',
+    message=r'resource_tracker: There appear to be .* leaked semaphore objects.*',
+    category=UserWarning,
+)
+
+# This app is text-only. In the Python 3.13 Miniconda environment, an
+# incompatible torchvision install can break PEFT via transformers imports.
+transformers_import_utils._torchvision_available = False
+
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 import torch
 from threading import Thread
@@ -92,6 +116,11 @@ if 'app_state' not in st.session_state:
 with st.sidebar:
     st.title('📚 Applications')
 
+    if st.button('🌐 General', use_container_width = True):
+        reset_session()
+        set_app_state(dict())
+        st.rerun()
+
     if st.button('📝 Transcription Analysis', use_container_width = True):
         reset_session()
         set_app_state(dict(
@@ -103,6 +132,7 @@ with st.sidebar:
             PROMPT_PLACEHOLDER = 'Paste your transcription here...',
             MODE_CAPTION = '📝 Transcription Analysis',
         ))
+        st.rerun()
 
     if st.button('💬 Patient Feedback Followup', use_container_width = True):
         reset_session()
@@ -114,6 +144,7 @@ with st.sidebar:
             PROMPT_PLACEHOLDER = 'Paste patient feedback message here...',
             MODE_CAPTION = '💬 Patient Feedback Followup',
         ))
+        st.rerun()
 
     if st.button('💊 Medicine Board', use_container_width = True):
         reset_session()
@@ -125,6 +156,7 @@ with st.sidebar:
             PROMPT_PLACEHOLDER = 'Ask about any medicine...',
             MODE_CAPTION = '💊 Medicine Board',
         ))
+        st.rerun()
 
     st.divider()
 

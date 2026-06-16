@@ -1,0 +1,26 @@
+streamlit
+
+# Core model stack
+torch
+transformers
+peft
+accelerate
+sentence-transformers
+datasets
+
+# Retrieval and data processing
+faiss-cpu
+numpy
+pandas
+
+# Medical NLP / entity highlighting
+spacy
+medspacy
+beautifulsoup4
+loguru
+
+# Classical ML classifiers
+scikit-learn
+joblib
+nltk
+Unidecode
