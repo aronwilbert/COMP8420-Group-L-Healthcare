@@ -39,4 +39,4 @@ To make changes to resource files like serialised RAG database, adapter (LoRA) w
 
 
 ## Individual Contributions
-Individual contributions of each group member on this repository can be found under the contributors tab.
+Individual contributions of each group member on this repository can be found under the contributors tab on the right.
