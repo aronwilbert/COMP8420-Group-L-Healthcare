@@ -40,3 +40,17 @@ To make changes to resource files like serialised RAG database, adapter (LoRA) w
 
 ## Individual Contributions
 Individual contributions of each group member on this repository can be found under the contributors tab on the right.
+
+| Name | Github handle |
+
+|----------|----------|
+
+| Md Juhaer Adittya Pasha    | pasha-292 |
+
+| Abrar Mahmud    | AbrarMahmudMq  |
+
+| Siyong Feng    | SiyongFeng  |
+
+| Aaron Wilbert Kosidin    | aronwilbert  |
+
+| Stanley Wijaya    | stanleywijayamq, tonehparkah |
