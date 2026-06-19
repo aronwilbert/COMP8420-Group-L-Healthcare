@@ -53,4 +53,4 @@ Individual contributions of each group member on this repository can be found un
 
 | Aaron Wilbert Kosidin    | aronwilbert  |
 
-| Stanley Wijaya    | stanleywijayamq, tonehparkah |
+| Stanley Wijaya    | stanleywijayamq & tonehparkah |
