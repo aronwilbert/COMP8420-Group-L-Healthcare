@@ -36,3 +36,7 @@ streamlit run medi_chat.py
 
 ## Development
 To make changes to resource files like serialised RAG database, adapter (LoRA) weights, classifier and vectoriser files (in joblib format), run the necessary ipynb notebook files generate updated version of these files.
+
+
+## Individual Contributions
+Individual contributions of each group member on this repository can be found under the contributors tab.
